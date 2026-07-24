@@ -1,5 +1,6 @@
 import { DefineFunction, Schema, SlackFunction } from "deno-slack-sdk/mod.ts";
 import KudosDatastore from "../datastores/kudos_datastore.ts";
+import { queryAllKudos } from "../datastores/query_all.ts";
 
 export const GiveKudosFunction = DefineFunction({
   callback_id: "give_kudos",
@@ -42,14 +43,25 @@ function getMonthStart(): string {
 export default SlackFunction(GiveKudosFunction, async ({ inputs, client }) => {
   const { giver_id, receiver_id, message, channel_id } = inputs;
 
+  // Business-rule rejections aren't workflow errors — tell the giver privately
+  // and finish the run successfully. `{ error }` is reserved for real failures,
+  // which Slack surfaces to the app's managers, not the end user.
+  const reject = async (text: string) => {
+    await client.chat.postEphemeral({
+      channel: channel_id,
+      user: giver_id,
+      text,
+    });
+    return { outputs: { confirmation: "not_sent" } };
+  };
+
   if (giver_id === receiver_id) {
-    return { error: "You can't give kudos to yourself!" };
+    return await reject(
+      ":sweat_smile: You can't give kudos to yourself — pick a teammate!",
+    );
   }
 
-  const historyResponse = await client.apps.datastore.query<
-    typeof KudosDatastore.definition
-  >({
-    datastore: "kudos",
+  const historyResponse = await queryAllKudos(client, {
     expression: "#giver = :giver",
     expression_attributes: { "#giver": "giver_id" },
     expression_values: { ":giver": giver_id },
@@ -70,20 +82,18 @@ export default SlackFunction(GiveKudosFunction, async ({ inputs, client }) => {
   }
 
   if (weeklyGiven >= WEEKLY_LIMIT) {
-    return {
-      error:
-        `You've reached your weekly limit of ${WEEKLY_LIMIT} kudos. Try again next week!`,
-    };
+    return await reject(
+      `:hourglass_flowing_sand: You've used all ${WEEKLY_LIMIT} of your kudos for this week. They refresh on Monday!`,
+    );
   }
 
   if (
     !monthlyReceivers.has(receiver_id) &&
     monthlyReceivers.size >= MONTHLY_DISTINCT_LIMIT
   ) {
-    return {
-      error:
-        `You've already given kudos to ${MONTHLY_DISTINCT_LIMIT} different people this month. Try again next month!`,
-    };
+    return await reject(
+      `:calendar: You've already spread kudos to ${MONTHLY_DISTINCT_LIMIT} different people this month — the max. Your list resets on the 1st!`,
+    );
   }
 
   const id = crypto.randomUUID();

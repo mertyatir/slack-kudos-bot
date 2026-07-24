@@ -1,5 +1,5 @@
 import { DefineFunction, Schema, SlackFunction } from "deno-slack-sdk/mod.ts";
-import KudosDatastore from "../datastores/kudos_datastore.ts";
+import { queryAllKudos } from "../datastores/query_all.ts";
 
 export const ShowLeaderboardFunction = DefineFunction({
   callback_id: "show_leaderboard",
@@ -82,9 +82,7 @@ export default SlackFunction(
   async ({ inputs, client }) => {
     const weekStart = getWeekStart();
 
-    const allTimeResponse = await client.apps.datastore.query<
-      typeof KudosDatastore.definition
-    >({ datastore: "kudos" });
+    const allTimeResponse = await queryAllKudos(client);
 
     if (!allTimeResponse.ok) {
       return { error: `Failed to query kudos: ${allTimeResponse.error}` };
